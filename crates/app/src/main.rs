@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod background;
+mod center_window;
+mod centered_position;
 mod controller;
 mod exif_text;
 #[cfg(test)]
@@ -350,6 +352,13 @@ fn main() -> anyhow::Result<()> {
         let _ = commands.try_send(Action::Open(path.into(), false));
     }
     let ui_started = Instant::now();
+    // Windows' primary monitor contains (0, 0). Choose it before DPI and
+    // preferred window size are resolved; center once the native frame exists.
+    slint::BackendSelector::new()
+        .with_winit_window_attributes_hook(|attributes| {
+            attributes.with_position(slint::winit_030::winit::dpi::PhysicalPosition::new(0, 0))
+        })
+        .select()?;
     let app = MainWindow::new()?;
     localization::install(&app);
     telemetry.record(
@@ -366,6 +375,8 @@ fn main() -> anyhow::Result<()> {
     let render_pending = pending_render.clone();
     let mut render_started = None;
     let mut first_render = true;
+    let placement_window = app.as_weak();
+    let mut initial_placement = true;
     let notifier = app
         .window()
         .set_rendering_notifier(move |state, _| match state {
@@ -377,7 +388,16 @@ fn main() -> anyhow::Result<()> {
                     true,
                 );
             }
-            slint::RenderingState::BeforeRendering => render_started = Some(Instant::now()),
+            slint::RenderingState::BeforeRendering => {
+                if initial_placement {
+                    initial_placement = false;
+                    let centered = placement_window
+                        .upgrade()
+                        .is_some_and(|app| center_window::center_on_primary(app.window()));
+                    render_log.record("startup-center-primary-monitor", 0, 0, centered);
+                }
+                render_started = Some(Instant::now());
+            }
             slint::RenderingState::AfterRendering => {
                 if first_render {
                     first_render = false;

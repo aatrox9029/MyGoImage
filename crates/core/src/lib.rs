@@ -95,6 +95,8 @@ pub struct Config {
     pub workers: usize,
     pub wheel_zoom: bool,
     pub trash_companions: bool,
+    // Session-only: always start in single-image mode, including with old settings.
+    #[serde(skip)]
     pub multi_view: bool,
     pub images_per_view: usize,
     pub preload_enabled: bool,

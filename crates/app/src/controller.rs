@@ -2937,14 +2937,14 @@ mod tests {
             .unwrap();
         }
         let base = dir.path().join("data");
-        Config {
+        let config = Config {
             multi_view: true,
             preload_enabled: false,
             ..Config::default()
-        }
-        .save(&base)
-        .unwrap();
+        };
+        config.save(&base).unwrap();
         let mut session = Session::new(base, BackgroundIo::default());
+        session.send(Action::Settings(config));
         session.send(Action::Open(photos, false));
         let deadline = Instant::now() + Duration::from_secs(10);
         let (list, id) = loop {
@@ -2996,14 +2996,14 @@ mod tests {
             std::fs::copy(photos.join("00.png"), photos.join(format!("{i:02}.png"))).unwrap();
         }
         let base = dir.path().join("data");
-        Config {
+        let config = Config {
             multi_view: true,
             images_per_view: 24,
             ..Config::default()
-        }
-        .save(&base)
-        .unwrap();
+        };
+        config.save(&base).unwrap();
         let mut session = Session::new(base, BackgroundIo::default());
+        session.send(Action::Settings(config));
         session.send(Action::Open(photos, false));
         session.wait(|event| matches!(event, Event::ScanComplete(48)));
         for (start, expected) in [(6, 42), (0, 48), (42, 6)] {
