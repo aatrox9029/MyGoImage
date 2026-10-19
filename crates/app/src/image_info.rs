@@ -1,5 +1,9 @@
 //! Metadata runs on a bounded worker; stale results are discarded by selection generation.
-use std::{fs::File, io::BufReader, path::Path};
+use std::{
+    fs::File,
+    io::{BufReader, Seek, SeekFrom},
+    path::Path,
+};
 
 #[derive(Clone, Debug)]
 pub struct Field {
@@ -45,7 +49,18 @@ pub fn read(
             format!("{:.2} MiB", metadata.len() as f64 / mygo_core::MIB as f64),
         ),
     ];
-    if let Ok((width, height)) = image::image_dimensions(path) {
+    let mut reader = BufReader::with_capacity(65536, file);
+    let png = crate::png_metadata::read_from(&mut reader, metadata.len())?;
+    let dimensions = if let Some(png) = &png {
+        png.dimensions
+    } else {
+        reader.seek(SeekFrom::Start(0))?;
+        image::ImageReader::new(&mut reader)
+            .with_guessed_format()?
+            .into_dimensions()
+            .ok()
+    };
+    if let Some((width, height)) = dimensions {
         fields.push(Field::new("尺寸", format!("{width} × {height}")));
     }
     if let Ok(date) = metadata.modified() {
@@ -56,14 +71,25 @@ pub fn read(
         ));
     }
     let mut warnings = Vec::new();
-    match exif::Reader::new()
-        .continue_on_error(true)
-        .read_from_container(&mut BufReader::new(file))
-        .or_else(|error| {
-            error.distill_partial_result(|errors| {
-                warnings.extend(errors.iter().map(ToString::to_string));
-            })
-        }) {
+    let mut custom = Vec::new();
+    let mut exif_reader = exif::Reader::new();
+    exif_reader.continue_on_error(true);
+    let exif_result = if let Some(png) = png {
+        warnings.extend(png.warnings);
+        custom = png.fields;
+        png.exif.map_or_else(
+            || Err(exif::Error::NotFound("PNG EXIF")),
+            |bytes| exif_reader.read_raw(bytes),
+        )
+    } else {
+        reader.seek(SeekFrom::Start(0))?;
+        exif_reader.read_from_container(&mut reader)
+    };
+    match exif_result.or_else(|error| {
+        error.distill_partial_result(|errors| {
+            warnings.extend(errors.iter().map(ToString::to_string));
+        })
+    }) {
         Ok(exif) => {
             for field in exif.fields() {
                 if field.ifd_num != exif::In::PRIMARY {
@@ -77,10 +103,7 @@ pub fn read(
         Err(exif::Error::NotFound(_)) => (),
         Err(error) => warnings.push(error.to_string()),
     }
-    match crate::png_metadata::read(path) {
-        Ok(custom) => fields.extend(custom),
-        Err(error) => warnings.push(format!("PNG 自訂資訊：{error:#}")),
-    }
+    fields.extend(custom);
     // Detailed parser errors stay in diagnostics rather than crowding the panel.
     if !warnings.is_empty() {
         if let Some(log) = diagnostics {
@@ -151,6 +174,49 @@ mod tests {
         );
         assert!(!fields.iter().any(|f| f.name == "讀取提示"));
     }
+    #[test]
+    fn png_camera_exif_and_dimensions_survive_late_text_crc_failure() {
+        use image::ImageEncoder;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("camera.png");
+        let mut bytes = Vec::new();
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+        encoder
+            .set_exif_metadata(
+                b"II*\0\x08\0\0\0\x01\0\x0f\x01\x02\0\x06\0\0\0\x1a\0\0\0\0\0\0\0Canon\0".to_vec(),
+            )
+            .unwrap();
+        encoder
+            .write_image(&[80; 12 * 8 * 3], 12, 8, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let end = bytes.split_off(bytes.len() - 12);
+        let text = b"prompt\0damaged";
+        bytes.extend((text.len() as u32).to_be_bytes());
+        bytes.extend(b"tEXt");
+        bytes.extend(text);
+        bytes.extend([0; 4]);
+        bytes.extend(end);
+        std::fs::write(&path, bytes).unwrap();
+        let log = mygo_telemetry::Telemetry::new(dir.path()).unwrap();
+        let fields = read(&path, Some(&log)).unwrap();
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.name == "尺寸" && f.value == "12 × 8")
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.name == "相機品牌" && f.value.contains("Canon"))
+        );
+        assert!(fields.iter().any(|f| f.name == "讀取提示"));
+        assert!(log.flush(std::time::Duration::from_secs(1)));
+        let diagnostics = std::fs::read_to_string(dir.path().join("diagnostics.jsonl")).unwrap();
+        assert!(diagnostics.contains("CRC"));
+        assert!(diagnostics.contains("offset="));
+        assert!(diagnostics.contains("tEXt"));
+    }
+
     #[test]
     fn reads_camera_details_from_exif() {
         let dir = tempfile::tempdir().unwrap();

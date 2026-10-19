@@ -2,6 +2,8 @@
 mod background;
 mod controller;
 mod exif_text;
+#[cfg(test)]
+mod format_dialog_tests;
 mod image_info;
 mod info_clipboard;
 mod localization;
@@ -581,6 +583,13 @@ fn main() -> anyhow::Result<()> {
                 w.set_grid_columns(grid_columns(w.get_images_per_view()));
                 let mut config = snapshot.borrow_mut();
                 config.language = mygo_core::Language::from_index(w.get_language_index());
+                config.image_formats.jpeg = w.get_format_jpeg();
+                config.image_formats.png = w.get_format_png();
+                config.image_formats.webp = w.get_format_webp();
+                config.image_formats.bmp = w.get_format_bmp();
+                config.image_formats.tiff = w.get_format_tiff();
+                config.image_formats.gif = w.get_format_gif();
+                config.image_formats.psd = w.get_format_psd();
                 config.wheel_zoom = true;
                 config.copy_shortcut = w.get_copy_shortcut().to_string();
                 config.trash_companions = w.get_trash_companions();
@@ -652,6 +661,13 @@ fn main() -> anyhow::Result<()> {
             match e {
                 Event::Settings(c, trash) => {
                     *settings_snapshot.borrow_mut() = c.clone();
+                    w.set_format_jpeg(c.image_formats.jpeg);
+                    w.set_format_png(c.image_formats.png);
+                    w.set_format_webp(c.image_formats.webp);
+                    w.set_format_bmp(c.image_formats.bmp);
+                    w.set_format_tiff(c.image_formats.tiff);
+                    w.set_format_gif(c.image_formats.gif);
+                    w.set_format_psd(c.image_formats.psd);
                     w.set_language_index(c.language.index());
                     w.global::<I18n>()
                         .set_english(c.language == mygo_core::Language::English);

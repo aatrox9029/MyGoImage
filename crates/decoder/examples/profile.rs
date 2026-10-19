@@ -16,8 +16,12 @@ fn main() -> anyhow::Result<()> {
         (1..=2).contains(&workers) && iterations > 0,
         "workers must be 1 or 2; iterations > 0"
     );
-    anyhow::ensure!(args[5] == "native" || args[5] == "image", "unknown backend");
+    anyhow::ensure!(
+        args[5] == "native" || args[5] == "image" || args[5] == "inflight",
+        "unknown backend"
+    );
     let image_jpeg = args[5] == "image";
+    let inflight = args[5] == "inflight";
     // No RAM/disk image cache. Inputs are pre-read by the orchestrator: OS warm.
     let started = Instant::now();
     let samples = std::thread::scope(|scope| {
@@ -27,7 +31,14 @@ fn main() -> anyhow::Result<()> {
                 let mut rows = Vec::new();
                 for index in (worker..iterations).step_by(workers) {
                     let config = Config { image_size_limit: 1, ..Config::default() };
-                    let (frame, times) = decode_profiled_backend(path, target, &config, &Cancel::default(), image_jpeg)?;
+                    let (frame, times) = if inflight {
+                        let mut source = mygo_decoder::SharedSource::open(path, &config, &Cancel::default())?;
+                        if source.is_native_size(target) { source.finish(target, &Cancel::default())? }
+                        else {
+                            let frame = source.render(target, &Cancel::default())?;
+                            (frame, source.timings())
+                        }
+                    } else { decode_profiled_backend(path, target, &config, &Cancel::default(), image_jpeg)? };
                     std::hint::black_box(&frame);
                     let fields = times.stages().iter().map(|(key, us)| format!("\"{key}\":{us}")).collect::<Vec<_>>().join(",");
                     rows.push(format!("{{\"index\":{index},\"width\":{},\"height\":{},\"read_bytes\":{},\"stages_us\":{{{fields}}}}}", frame.width, frame.height, times.read_bytes));

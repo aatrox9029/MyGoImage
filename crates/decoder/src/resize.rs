@@ -86,6 +86,21 @@ pub fn resize_cpu(
     config: &Config,
     cancel: &Cancel,
 ) -> Result<DynamicImage> {
+    if !cancel.cancelled() && (target == 0 || image.width().max(image.height()) <= target) {
+        anyhow::ensure!(image.width() > 0 && image.height() > 0, "影像尺寸不得為零");
+        RESIZER.with_borrow_mut(Resizer::reset_internal_buffers);
+        return Ok(image);
+    }
+    resize_borrowed(&image, target, config, cancel)
+}
+
+/// Resample directly from shared pixels. Only unchanged-size outputs need a copy.
+pub(crate) fn resize_borrowed(
+    image: &DynamicImage,
+    target: u32,
+    config: &Config,
+    cancel: &Cancel,
+) -> Result<DynamicImage> {
     if cancel.cancelled() {
         RESIZER.with_borrow_mut(Resizer::reset_internal_buffers);
         bail!("載入已取消");
@@ -93,19 +108,19 @@ pub fn resize_cpu(
     anyhow::ensure!(image.width() > 0 && image.height() > 0, "影像尺寸不得為零");
     if target == 0 || image.width().max(image.height()) <= target {
         RESIZER.with_borrow_mut(Resizer::reset_internal_buffers);
-        return Ok(image);
+        return Ok(image.clone());
     }
-    let (width, height) = dimensions(&image, target);
+    let (width, height) = dimensions(image, target);
     // Measured exception: SIMD alpha premultiplication is slower for RGBA8
     // thumbnails <=320px. Retain their existing algorithm/appearance.
     let small_rgba = image.color() == ColorType::Rgba8 && target <= 320;
     let budget = config.image_limits().map_or(u64::MAX, |limits| limits.3);
     let use_simd = !small_rgba
         && image.pixel_type().is_some()
-        && working_bytes(&image, width, height) <= budget;
+        && working_bytes(image, width, height) <= budget;
     let resized = if use_simd {
         // Drop failed destination and scratch before any legacy fallback.
-        resize_fir(&image, width, height, budget).ok()
+        resize_fir(image, width, height, budget).ok()
     } else {
         RESIZER.with_borrow_mut(Resizer::reset_internal_buffers);
         None

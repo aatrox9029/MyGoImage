@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     ensure!(
         args.len() >= 6,
-        "source_work serial|shared|parallel|image-jpeg WORKERS GLOBAL_MIB ROUNDS FILE..."
+        "source_work serial|shared|inflight|parallel|image-jpeg WORKERS GLOBAL_MIB ROUNDS FILE..."
     );
     let mode = &args[1];
     let workers: usize = args[2].parse()?;
@@ -24,7 +24,7 @@ fn main() -> Result<()> {
         "invalid limits"
     );
     ensure!(
-        ["serial", "shared", "parallel", "image-jpeg"].contains(&mode.as_str()),
+        ["serial", "shared", "inflight", "parallel", "image-jpeg"].contains(&mode.as_str()),
         "invalid mode"
     );
     let files: Vec<PathBuf> = args[5..].iter().map(PathBuf::from).collect();
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
                         .iter()
                         .map(|path| {
                             let config = &config;
-                            scope.spawn(move || run(path, config, false, false))
+                            scope.spawn(move || run(path, config, "", false))
                         })
                         .collect();
                     handles
@@ -57,7 +57,7 @@ fn main() -> Result<()> {
             }
         } else {
             for path in &files {
-                outputs.push(run(path, &config, mode == "shared", mode == "image-jpeg")?);
+                outputs.push(run(path, &config, mode, mode == "image-jpeg")?);
             }
         }
         samples.push(
@@ -74,7 +74,7 @@ fn main() -> Result<()> {
 fn run(
     path: &std::path::Path,
     config: &Config,
-    shared: bool,
+    sharing: &str,
     image_jpeg: bool,
 ) -> Result<serde_json::Value> {
     let targets: Vec<_> = [1600, 1000, 640, 320]
@@ -92,7 +92,17 @@ fn run(
         Ok(())
     };
     let (mut read_bytes, mut codec_us, mut source_opens, mut codec_calls) = (0, 0, 0, 0);
-    if shared {
+    if sharing == "inflight" {
+        let mut source = mygo_decoder::SharedSource::open(path, config, &Cancel::default())?;
+        for (index, (target, cancel)) in targets.iter().enumerate() {
+            emit(index, source.render(*target, cancel)?)?;
+        }
+        let timing = source.timings();
+        read_bytes += timing.read_bytes;
+        codec_us += timing.codec_us;
+        source_opens += timing.source_opens;
+        codec_calls += timing.codec_calls;
+    } else if sharing == "shared" {
         let timing = decode_shared(path, &targets, config, &Cancel::default(), &mut emit)?;
         read_bytes += timing.read_bytes;
         codec_us += timing.codec_us;

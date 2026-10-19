@@ -1,5 +1,7 @@
+mod formats;
 mod language;
 use anyhow::Context;
+pub use formats::ImageFormats;
 pub use language::Language;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -80,6 +82,7 @@ impl Sort {
 #[serde(default)]
 pub struct Config {
     pub language: Language,
+    pub image_formats: ImageFormats,
     pub image_size_limit: usize,
     pub thumbnail_mib: usize,
     pub main_mib: usize,
@@ -104,6 +107,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: Language::default(),
+            image_formats: ImageFormats::default(),
             image_size_limit: 0,
             thumbnail_mib: 128,
             main_mib: 384,
@@ -242,12 +246,7 @@ pub fn data_dir() -> PathBuf {
         .join("MyGoImage")
 }
 pub fn supported(path: &Path) -> bool {
-    path.extension().and_then(|s| s.to_str()).is_some_and(|s| {
-        matches!(
-            s.to_ascii_lowercase().as_str(),
-            "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff" | "gif"
-        )
-    })
+    ImageFormats::default().allows(path)
 }
 /// Volume serial + volume-relative scope: independent of Windows drive letter.
 pub fn volume_scope(root: &Path) -> anyhow::Result<String> {

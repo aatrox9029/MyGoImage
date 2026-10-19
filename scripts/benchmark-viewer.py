@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
 parser.add_argument('--exe',type=Path,default=ROOT/'target/release/mygoimage.exe')
 parser.add_argument('--output',type=Path,default=ROOT/'test-output/viewer-benchmark')
-parser.add_argument('--storage',default='local storage; specify model with --storage')
+parser.add_argument('--storage',default='local NVMe; model recorded in docs/VALIDATION.md')
 parser.add_argument('--runs',type=int,default=3)
 parser.add_argument('--source-photo',type=Path)
 invocation=str(time.time_ns())

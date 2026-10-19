@@ -313,244 +313,9 @@ impl CacheStage {
             })
     }
 }
-struct SourceStage {
-    result_budget: PixelBudget,
-    jobs: Scheduler<DecodeTask>,
-    results: mpsc::SyncSender<Decoded>,
-    thumb: Ram,
-    main: Ram,
-    disk: Arc<Mutex<DiskCache>>,
-    epoch: Arc<AtomicU64>,
-    bytes: Arc<AtomicU64>,
-    ready: Arc<tokio::sync::Notify>,
-    writes: mpsc::SyncSender<(String, Frame, Cancel, u64)>,
-    log: mygo_telemetry::Telemetry,
-}
-impl SourceStage {
-    fn spawn(self) -> std::io::Result<std::thread::JoinHandle<()>> {
-        std::thread::Builder::new()
-            .name("source-decode".into())
-            .spawn(move || {
-                while let Some(first) = self.jobs.pop() {
-                    let mut batch = vec![first];
-                    // Never delay Main to gather work. Only drain compatible misses
-                    // already admitted by the independent cache lookup stage.
-                    if batch[0].payload.shareable() {
-                        let first = &batch[0].payload;
-                        let mut related =
-                            self.jobs.take_matching(7, |task| first.same_source(task));
-                        batch.append(&mut related);
-                        batch.sort_by_key(|job| job.priority as usize);
-                    }
-                    let batch = batch
-                        .into_iter()
-                        .filter(|job| {
-                            if job.cancel.cancelled() {
-                                return false;
-                            }
-                            let started = Instant::now();
-                            let task = &job.payload;
-                            let key = task.key();
-                            self.log.record(
-                                "decode-queue-wait",
-                                task.enqueued.elapsed().as_micros(),
-                                0,
-                                true,
-                            );
-                            let cache = if task.main { &self.main } else { &self.thumb };
-                            let (hit, origin) = cached_frame(task, cache, &self.disk);
-                            self.log.trace(
-                                origin,
-                                job.request_id,
-                                job.generation_id,
-                                &key,
-                                started.elapsed().as_micros(),
-                                true,
-                            );
-                            if let Some(frame) = hit {
-                                self.complete(job, Ok(frame), true);
-                                false
-                            } else {
-                                true
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    if batch.is_empty() {
-                        continue;
-                    }
-                    let mut delivered = vec![false; batch.len()];
-                    if batch.len() > 1 {
-                        let source_cancel =
-                            Cancel::when_all(batch.iter().map(|job| job.cancel.clone()).collect());
-                        let targets = batch
-                            .iter()
-                            .map(|job| (job.payload.target, job.cancel.clone()))
-                            .collect::<Vec<_>>();
-                        for job in &batch {
-                            self.started(job);
-                        }
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            mygo_decoder::decode_shared_exact(
-                                &batch[0].payload.path,
-                                &targets,
-                                &batch[0].payload.config,
-                                &source_cancel,
-                                |index, frame| {
-                                    self.complete(&batch[index], Ok(frame), false);
-                                    delivered[index] = true;
-                                    Ok(())
-                                },
-                            )
-                        }));
-                        self.log.record(
-                            "source-shared-batch",
-                            0,
-                            batch.len() as u64,
-                            matches!(&result, Ok(Ok(_))),
-                        );
-                        if let Ok(Ok(timings)) = result {
-                            self.log.record(
-                                "source-shared-total",
-                                timings.total_us as u128,
-                                batch.len() as u64,
-                                true,
-                            );
-                            self.log
-                                .record("image-read-bytes", 0, timings.read_bytes, true);
-                            self.log
-                                .record("source-codec-calls", 0, timings.codec_calls, true);
-                        }
-                        // Shared work has a stricter memory guard. Unemitted targets
-                        // fall back independently; completed targets never restart.
-                    }
-                    for (index, job) in batch.iter().enumerate() {
-                        if delivered[index] || job.cancel.cancelled() {
-                            continue;
-                        }
-                        self.started(job);
-                        let started = Instant::now();
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let (frame, timings) = mygo_decoder::decode_profiled(
-                                &job.payload.path,
-                                job.payload.target,
-                                &job.payload.config,
-                                &job.cancel,
-                            )?;
-                            self.timings(job, timings);
-                            Ok(frame)
-                        }))
-                        .unwrap_or_else(|_| Err(anyhow::anyhow!("解碼器無法處理此圖片")));
-                        self.log.record(
-                            "source-decode",
-                            started.elapsed().as_micros(),
-                            1,
-                            result.is_ok(),
-                        );
-                        self.complete(job, result, false);
-                    }
-                }
-            })
-    }
-    fn started(&self, job: &Job<DecodeTask>) {
-        self.log.trace(
-            "decode-start",
-            job.request_id,
-            job.generation_id,
-            &job.payload.key(),
-            job.payload.enqueued.elapsed().as_micros(),
-            true,
-        );
-    }
-    fn timings(&self, job: &Job<DecodeTask>, timings: mygo_decoder::DecodeTimings) {
-        for (event, micros) in timings.stages() {
-            self.log.trace(
-                event,
-                job.request_id,
-                job.generation_id,
-                &job.payload.key(),
-                u128::from(micros),
-                true,
-            );
-        }
-        self.log
-            .record("image-read-bytes", 0, timings.read_bytes, true);
-        self.log
-            .record("source-codec-calls", 0, timings.codec_calls, true);
-    }
-    fn complete(&self, job: &Job<DecodeTask>, result: Result<Frame>, cached: bool) {
-        if job.cancel.cancelled() {
-            return;
-        }
-        let task = &job.payload;
-        let key = task.key();
-        self.log.trace(
-            "decode-complete",
-            job.request_id,
-            job.generation_id,
-            &key,
-            task.enqueued.elapsed().as_micros(),
-            result.is_ok(),
-        );
-        if let Ok(frame) = &result {
-            let mut cache = (if task.main { &self.main } else { &self.thumb })
-                .lock()
-                .unwrap();
-            if self.epoch.load(Ordering::Acquire) == task.cache_epoch {
-                cache.put(key.clone(), frame.clone(), frame.bytes());
-            }
-        }
-        self.log.record(
-            if task.main {
-                "main-decode"
-            } else {
-                "thumbnail"
-            },
-            task.enqueued.elapsed().as_micros(),
-            u64::from(cached),
-            result.is_ok(),
-        );
-        let write = result
-            .as_ref()
-            .ok()
-            .filter(|_| !task.main && task.target <= 1000 && !cached)
-            .map(|frame| (key, frame.clone(), job.cancel.clone(), task.cache_epoch));
-        let permit = if let Ok(frame) = &result {
-            let Some(permit) = self.result_budget.acquire(frame, &job.cancel) else {
-                return;
-            };
-            Some(permit)
-        } else {
-            None
-        };
-        let bytes = result.as_ref().map_or(0, |frame| frame.bytes() as u64);
-        self.bytes.fetch_add(bytes, Ordering::Relaxed);
-        if self
-            .results
-            .send(Decoded {
-                _permit: permit,
-                request: job.request_id,
-                task: task.clone(),
-                generation: job.generation_id,
-                result,
-                elapsed: task.enqueued.elapsed().as_millis(),
-            })
-            .is_err()
-        {
-            self.bytes.fetch_sub(bytes, Ordering::Relaxed);
-            job.cancel.cancel();
-            return;
-        }
-        self.ready.notify_one();
-        if let Some(write) = write {
-            self.log.record(
-                "cache-write-enqueue",
-                0,
-                1,
-                self.writes.try_send(write).is_ok(),
-            );
-        }
-    }
-}
+#[path = "source_stage.rs"]
+mod source_stage;
+use source_stage::SourceStage;
 struct FileResult {
     cleared: bool,
     copied: Option<usize>,
@@ -1186,6 +951,7 @@ impl Controller {
                 self.settings_revision += 1;
                 self.settings_worker
                     .submit((self.settings_revision, config.clone()));
+                let changed_formats = self.config.image_formats != config.image_formats;
                 let changed_mode = self.config.multi_view != config.multi_view;
                 let changed_size = self.config.image_size_limit != config.image_size_limit;
                 let changed_preload = self.config.preload_enabled != config.preload_enabled
@@ -1227,6 +993,9 @@ impl Controller {
                 }
                 if changed_preload {
                     self.preload()?;
+                }
+                if changed_formats && !self.root.as_os_str().is_empty() {
+                    self.open(self.root.clone(), self.recursive)?;
                 }
             }
             Action::OpenTrash => {
@@ -1472,17 +1241,16 @@ impl Controller {
         };
         // Dialog result is returned over a private bounded channel, polled as a scan-independent command.
         let (tx, rx) = mpsc::sync_channel(1);
+        let formats = self.config.image_formats.clone();
+        anyhow::ensure!(
+            !file || !formats.extensions().is_empty(),
+            "請先在設定啟用至少一種圖片格式"
+        );
         std::thread::spawn(move || {
             let dialog = rfd::FileDialog::new().set_directory(root);
             let p = if file {
                 dialog
-                    .add_filter(
-                        "圖片",
-                        &[
-                            "jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "gif", "heic",
-                            "avif", "raw",
-                        ],
-                    )
+                    .add_filter("Images", &formats.extensions())
                     .pick_file()
             } else {
                 dialog.pick_folder()
@@ -1559,6 +1327,10 @@ impl Controller {
         Ok(())
     }
     fn open(&mut self, path: PathBuf, recursive: bool) -> Result<()> {
+        anyhow::ensure!(
+            !path.is_file() || self.config.image_formats.allows(&path),
+            "此圖片格式未啟用，請至設定勾選要讀入的格式"
+        );
         self.rank_pending = None;
         self.source_epoch += 1;
         self.submit_source(SourceTask::Open(path, recursive));
@@ -1581,6 +1353,9 @@ impl Controller {
             pending_file,
             recursive,
         } = source;
+        let scope = format!("{scope}:formats={}", self.config.image_formats.scope_key());
+        let pending_file =
+            pending_file.filter(|name| self.config.image_formats.allows(Path::new(name)));
         self.db.scope(&scope)?;
         self.scope = scope;
         self.scan_cancel.cancel();
@@ -1651,19 +1426,21 @@ impl Controller {
         let cancel = self.scan_cancel.clone();
         let trash = self.trash_directory()?;
         let ready = self.ready.clone();
+        let formats = self.config.image_formats.clone();
         self.scan_remainder.clear();
         self.handles.push(
             std::thread::Builder::new()
                 .name("directory-scan".into())
                 .spawn(move || {
                     let trash = trash.canonicalize().ok();
-                    mygo_scanner::scan_excluding_notifying(
+                    mygo_scanner::scan_filtered(
                         &root,
                         recursive,
                         &cancel,
                         &tx,
                         trash.as_deref(),
                         &|| ready.notify_one(),
+                        &formats,
                     )
                 })?,
         );
@@ -2590,6 +2367,7 @@ pub fn benchmark_scan(root: PathBuf, output: PathBuf, legacy: bool) -> Result<()
 mod tests {
     use super::*;
     include!("viewer_update_tests.rs");
+    include!("format_settings_tests.rs");
     fn settings(
         wheel_zoom: bool,
         trash_companions: bool,
@@ -2781,6 +2559,89 @@ mod tests {
             }
         }
         session.shutdown();
+    }
+
+    #[test]
+    fn source_arrivals_after_codec_join_with_main_priority_and_eight_job_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("arrivals.png");
+        image::RgbaImage::from_pixel(417, 259, image::Rgba([80, 40, 20, 127]))
+            .save(&path)
+            .unwrap();
+        let jobs = Scheduler::default();
+        let (results, rx) = mpsc::sync_channel(16);
+        let (writes, _writer) = mpsc::sync_channel(16);
+        let log = mygo_telemetry::Telemetry::new(dir.path()).unwrap();
+        let stage = SourceStage {
+            result_budget: PixelBudget::new(8 * MIB),
+            jobs: jobs.clone(),
+            results,
+            thumb: Arc::new(Mutex::new(ByteLru::new(0))),
+            main: Arc::new(Mutex::new(ByteLru::new(0))),
+            disk: Arc::new(Mutex::new(
+                DiskCache::new(&dir.path().join("cache"), MIB as u64).unwrap(),
+            )),
+            epoch: Arc::new(AtomicU64::new(0)),
+            bytes: Arc::new(AtomicU64::new(0)),
+            ready: Arc::new(tokio::sync::Notify::new()),
+            writes,
+            log: log.clone(),
+        };
+        let make_job = |request, priority| {
+            let mut task = subscriber(1, Cancel::default()).task;
+            task.path = path.clone();
+            task.target = 16 + request as u32;
+            task.main = priority == Priority::Main;
+            Job {
+                request_id: request,
+                generation_id: 1,
+                file_id: 1,
+                priority,
+                cancel: Cancel::default(),
+                payload: task,
+            }
+        };
+        let mut batch = vec![make_job(1, Priority::Visible)];
+        let mut source =
+            mygo_decoder::SharedSource::open(&path, &Config::default(), &Cancel::default())
+                .unwrap();
+        // All of these arrive after the codec has finished. An incompatible
+        // epoch and a cancelled subscriber must stay out of the operation.
+        for request in 2..=9 {
+            jobs.submit(make_job(request, Priority::Visible));
+        }
+        jobs.submit(make_job(10, Priority::Main));
+        let cancelled = make_job(11, Priority::Main);
+        cancelled.cancel.cancel();
+        jobs.submit(cancelled);
+        let mut incompatible = make_job(12, Priority::Main);
+        incompatible.payload.cache_epoch = 1;
+        jobs.submit(incompatible);
+        let mut delivered = Vec::new();
+        stage
+            .finish_shared(&mut source, &mut batch, &mut delivered)
+            .unwrap();
+        assert_eq!(batch.len(), 8);
+        assert_eq!(delivered.len(), 8);
+        assert_eq!(jobs.pending(), 3);
+        assert_eq!(source.timings().codec_calls, 1);
+        assert_eq!(source.timings().source_opens, 1);
+        let first = rx.try_recv().unwrap();
+        assert_eq!(first.request, 10);
+        for decoded in std::iter::once(first).chain(rx.try_iter()) {
+            let expected = mygo_decoder::decode(
+                &path,
+                decoded.task.target,
+                &Config::default(),
+                &Cancel::default(),
+            )
+            .unwrap();
+            assert_eq!(decoded.result.unwrap().rgba, expected.rgba);
+        }
+        assert!(log.flush(Duration::from_secs(1)));
+        let records = std::fs::read_to_string(dir.path().join("diagnostics.jsonl")).unwrap();
+        assert!(records.contains("source-join"));
+        jobs.close();
     }
 
     #[test]

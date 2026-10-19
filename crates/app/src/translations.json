@@ -149,5 +149,11 @@
   "PNG/TIFF 等完整解碼超出記憶體預算；此版本未提供分塊解碼": "Full decoding exceeds the memory budget; tiled decoding is unavailable",
   "縮圖快取已損壞": "Thumbnail cache is damaged",
   "縮圖快取尺寸錯誤": "Invalid thumbnail cache dimensions",
-  "部分圖片資訊無法讀取": "Some image information could not be read"
+  "部分圖片資訊無法讀取": "Some image information could not be read",
+  "讀入的圖片格式": "Image formats to load",
+  "預設全部勾選，變更後立即更新圖片清單並儲存。": "All formats are enabled by default. Changes update the image list and save immediately.",
+  "全選": "Select all",
+  "全部取消": "Deselect all",
+  "此圖片格式未啟用，請至設定勾選要讀入的格式": "This image format is disabled. Enable it in Settings.",
+  "請先在設定啟用至少一種圖片格式": "Enable at least one image format in Settings first."
 }

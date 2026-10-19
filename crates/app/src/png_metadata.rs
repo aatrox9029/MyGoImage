@@ -1,56 +1,111 @@
 //! Read text chunks without decoding pixels, including chunks after IDAT.
 use crate::image_info::Field;
 use anyhow::{Context, Result, ensure};
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::Path,
-};
+use std::io::{Read, Seek};
+
+#[cfg(test)]
+use std::{fs::File, io::BufReader, path::Path};
 
 const LIMIT: usize = 8 * 1024 * 1024;
 
+#[derive(Default)]
+pub struct Metadata {
+    pub dimensions: Option<(u32, u32)>,
+    pub exif: Option<Vec<u8>>,
+    pub fields: Vec<Field>,
+    pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
 pub fn read(path: &Path) -> Result<Vec<Field>> {
-    let mut file = File::open(path)?;
+    let file = File::open(path)?;
     let size = file.metadata()?.len();
+    let Some(metadata) = read_from(&mut BufReader::new(file), size)? else {
+        return Ok(Vec::new());
+    };
+    ensure!(
+        metadata.warnings.is_empty(),
+        "{}",
+        metadata.warnings.join("; ")
+    );
+    Ok(metadata.fields)
+}
+
+/// Scan PNG once, retaining useful earlier metadata if a later chunk is damaged.
+/// IDAT payloads are skipped. The caller keeps the same buffered file for other
+/// formats, so PNG metadata never reopens the source or decodes its pixels.
+pub fn read_from(file: &mut (impl Read + Seek), size: u64) -> Result<Option<Metadata>> {
     let mut signature = [0; 8];
     if file.read_exact(&mut signature).is_err() || signature != *b"\x89PNG\r\n\x1a\n" {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    let mut fields = Vec::new();
+    let mut metadata = Metadata::default();
+    if let Err(error) = scan(file, size, &mut metadata) {
+        metadata.warnings.push(format!("PNG 資訊：{error:#}"));
+    }
+    Ok(Some(metadata))
+}
+
+fn scan(file: &mut (impl Read + Seek), size: u64, metadata: &mut Metadata) -> Result<()> {
     let mut used = 0;
+    let mut position = 8u64;
     for _ in 0..100_000 {
+        let offset = position;
         let mut header = [0; 8];
-        file.read_exact(&mut header).context("截斷的 PNG 標頭")?;
+        file.read_exact(&mut header)
+            .with_context(|| format!("截斷的 PNG 標頭，offset={offset}"))?;
         let length = u32::from_be_bytes(header[..4].try_into()?) as usize;
-        ensure!(
-            file.stream_position()? + length as u64 + 4 <= size,
-            "截斷的 PNG 區塊"
-        );
+        position += 12 + length as u64;
         let kind = &header[4..];
-        if matches!(kind, b"tEXt" | b"zTXt" | b"iTXt") {
-            ensure!(length <= LIMIT - used, "自訂資訊超過 8 MiB 限制");
-            let mut data = vec![0; length];
-            file.read_exact(&mut data)?;
-            let mut crc = [0; 4];
-            file.read_exact(&mut crc)?;
-            let mut hash = crc32fast::Hasher::new();
-            hash.update(kind);
-            hash.update(&data);
-            ensure!(
-                hash.finalize() == u32::from_be_bytes(crc),
-                "自訂資訊 CRC 錯誤"
-            );
-            let field = parse(kind, &data, LIMIT - used)?;
-            used += length.max(field.name.len() + field.value.len());
-            ensure!(used <= LIMIT, "自訂資訊超過 8 MiB 限制");
-            if !field.value.trim().is_empty() {
-                fields.push(field);
-            }
+        let name = String::from_utf8_lossy(kind);
+        ensure!(
+            position <= size,
+            "截斷的 PNG 區塊 {name}，offset={offset}，length={length}"
+        );
+        if matches!(kind, b"IHDR" | b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt") {
+            let result = (|| -> Result<()> {
+                if kind == b"IHDR" {
+                    ensure!(length == 13, "無效的 IHDR 長度");
+                } else {
+                    ensure!(length <= LIMIT - used, "自訂資訊超過 8 MiB 限制");
+                }
+                let mut data = vec![0; length];
+                file.read_exact(&mut data)?;
+                let mut crc = [0; 4];
+                file.read_exact(&mut crc)?;
+                let mut hash = crc32fast::Hasher::new();
+                hash.update(kind);
+                hash.update(&data);
+                ensure!(hash.finalize() == u32::from_be_bytes(crc), "資訊 CRC 錯誤");
+                match kind {
+                    b"IHDR" => {
+                        let width = u32::from_be_bytes(data[..4].try_into()?);
+                        let height = u32::from_be_bytes(data[4..8].try_into()?);
+                        ensure!(width > 0 && height > 0, "無效的 PNG 尺寸");
+                        metadata.dimensions = Some((width, height));
+                    }
+                    b"eXIf" => {
+                        used += length;
+                        ensure!(metadata.exif.is_none(), "重複的 eXIf 區塊");
+                        metadata.exif = Some(data);
+                    }
+                    _ => {
+                        let field = parse(kind, &data, LIMIT - used)?;
+                        used += length.max(field.name.len() + field.value.len());
+                        ensure!(used <= LIMIT, "自訂資訊超過 8 MiB 限制");
+                        if !field.value.trim().is_empty() {
+                            metadata.fields.push(field);
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            result.with_context(|| format!("{name}?offset={offset}?length={length}"))?;
         } else {
-            file.seek(SeekFrom::Current(length as i64 + 4))?;
+            file.seek_relative(length as i64 + 4)?;
         }
         if kind == b"IEND" {
-            return Ok(fields);
+            return Ok(());
         }
     }
     anyhow::bail!("PNG 區塊數量超過限制")
@@ -160,6 +215,81 @@ mod tests {
         png[20] ^= 1;
         std::fs::write(&path, png).unwrap();
         assert!(read(&path).is_err());
+    }
+
+    #[test]
+    fn single_scan_reads_dimensions_exif_and_late_text_with_bounded_io() {
+        use std::io::{Cursor, SeekFrom};
+        struct Counted {
+            cursor: Cursor<Vec<u8>>,
+            bytes: usize,
+            seeks: usize,
+        }
+        impl Read for Counted {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.cursor.read(buffer)?;
+                self.bytes += n;
+                Ok(n)
+            }
+        }
+        impl Seek for Counted {
+            fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+                self.seeks += 1;
+                self.cursor.seek(position)
+            }
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(120u32.to_be_bytes());
+        ihdr.extend(80u32.to_be_bytes());
+        ihdr.extend([8, 2, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &ihdr);
+        chunk(&mut png, b"IDAT", &vec![0; 2 * LIMIT]);
+        chunk(&mut png, b"eXIf", b"TIFF bytes");
+        chunk(&mut png, b"tEXt", b"prompt\0late text");
+        chunk(&mut png, b"IEND", b"");
+        let size = png.len() as u64;
+        let mut counted = Counted {
+            cursor: Cursor::new(png.clone()),
+            bytes: 0,
+            seeks: 0,
+        };
+        let result = read_from(&mut counted, size).unwrap().unwrap();
+        assert_eq!(result.dimensions, Some((120, 80)));
+        assert_eq!(result.exif.unwrap(), b"TIFF bytes");
+        assert_eq!(result.fields[0].value, "late text");
+        assert!(result.warnings.is_empty());
+        assert!(counted.bytes < 256, "IDAT must not be read");
+        assert_eq!(counted.seeks, 2, "only IDAT and IEND are skipped");
+        // Preserve earlier dimensions with a detailed chunk/offset diagnostic.
+        let text_offset = png.len() - 12 - (12 + b"prompt\0late text".len());
+        png[text_offset + 10] ^= 1;
+        let result = read_from(&mut Cursor::new(png), size).unwrap().unwrap();
+        assert_eq!(result.dimensions, Some((120, 80)));
+        assert!(result.warnings[0].contains("CRC"));
+        assert!(result.warnings[0].contains("tEXt"));
+        assert!(result.warnings[0].contains("offset="));
+    }
+
+    #[test]
+    fn rejects_oversized_chunks_and_aggregate_text_before_allocating() {
+        use std::io::Cursor;
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend(((LIMIT + 1) as u32).to_be_bytes());
+        bytes.extend(b"eXIf");
+        let result = read_from(&mut Cursor::new(bytes), u64::MAX)
+            .unwrap()
+            .unwrap();
+        assert!(result.warnings[0].contains("8 MiB"));
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut data = b"key\0".to_vec();
+        data.resize(LIMIT / 2 + 1, b'a');
+        chunk(&mut bytes, b"tEXt", &data);
+        chunk(&mut bytes, b"tEXt", &data);
+        let size = bytes.len() as u64;
+        let result = read_from(&mut Cursor::new(bytes), size).unwrap().unwrap();
+        assert_eq!(result.fields.len(), 1);
+        assert!(result.warnings[0].contains("8 MiB"));
     }
 
     #[test]

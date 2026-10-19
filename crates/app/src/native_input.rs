@@ -38,6 +38,7 @@ pub fn install(window: &MainWindow, commands: UiCommands) {
             WindowEvent::DroppedFile(path) => {
                 if mygo_core::supported(path) {
                     window.invoke_save_settings();
+                    window.set_formats_open(false);
                     window.set_settings_open(false);
                     window.set_capture_shortcut(false);
                     let _ = commands.try_send(Action::Open(path.clone(), false));

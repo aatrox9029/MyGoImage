@@ -1,0 +1,58 @@
+import { Button, CheckBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { I18n } from "../i18n.slint";
+
+export component FormatSettingsDialog inherits Rectangle {
+    in-out property <bool> open: false;
+    in-out property <bool> format-jpeg: true;
+    in-out property <bool> format-png: true;
+    in-out property <bool> format-webp: true;
+    in-out property <bool> format-bmp: true;
+    in-out property <bool> format-tiff: true;
+    in-out property <bool> format-gif: true;
+    in-out property <bool> format-psd: true;
+    callback save-settings();
+    callback closed();
+    visible: root.open;
+    background: #00000099;
+    changed open => { if root.open { dialog-keys.focus(); } }
+    function close() { root.open = false; root.closed(); }
+
+    // Block interaction with the settings page while selecting formats.
+    TouchArea {}
+    dialog-keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.close(); return accept; }
+            return reject;
+        }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: min(520px, root.width - 48px);
+            height: 460px;
+            background: #1b242d;
+            border-color: #465d70;
+            border-width: 1px;
+            border-radius: 10px;
+            VerticalBox {
+                padding: 24px; spacing: 10px;
+                Text { text: I18n.t("讀入的圖片格式"); color: #75c2ef; font-size: 20px; }
+                Text { text: I18n.t("預設全部勾選，變更後立即更新圖片清單並儲存。"); color: #a9bfce; wrap: word-wrap; }
+                CheckBox { text: "JPEG (.jpg / .jpeg)"; checked <=> root.format-jpeg; toggled => { root.save-settings(); } }
+                CheckBox { text: "PNG"; checked <=> root.format-png; toggled => { root.save-settings(); } }
+                CheckBox { text: "WebP"; checked <=> root.format-webp; toggled => { root.save-settings(); } }
+                CheckBox { text: "BMP"; checked <=> root.format-bmp; toggled => { root.save-settings(); } }
+                CheckBox { text: "TIFF (.tif / .tiff)"; checked <=> root.format-tiff; toggled => { root.save-settings(); } }
+                CheckBox { text: "GIF"; checked <=> root.format-gif; toggled => { root.save-settings(); } }
+                CheckBox { text: "PSD"; checked <=> root.format-psd; toggled => { root.save-settings(); } }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalBox {
+                    padding: 0px;
+                    Button { text: I18n.t("全選"); clicked => { root.format-jpeg = true; root.format-png = true; root.format-webp = true; root.format-bmp = true; root.format-tiff = true; root.format-gif = true; root.format-psd = true; root.save-settings(); } }
+                    Button { text: I18n.t("全部取消"); clicked => { root.format-jpeg = false; root.format-png = false; root.format-webp = false; root.format-bmp = false; root.format-tiff = false; root.format-gif = false; root.format-psd = false; root.save-settings(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: I18n.t("完成"); clicked => { root.close(); } }
+                }
+            }
+        }
+    }
+}

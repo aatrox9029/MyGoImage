@@ -2,8 +2,16 @@ use anyhow::{Context, Result, bail};
 mod icc;
 use icc::apply_icc;
 mod jpeg;
+#[cfg(test)]
+mod png_tests;
+mod psd;
+mod psd_rle;
+#[cfg(test)]
+mod psd_tests;
 mod resize;
+mod shared;
 pub use resize::resize_cpu;
+pub use shared::SharedSource;
 
 /// Includes resampling and alpha semantics; old disk pixels must not be reused.
 pub const PIXEL_PIPELINE_VERSION: &str = "rgba-v3-simd-triangle-v1";
@@ -13,7 +21,7 @@ use mygo_core::MIB;
 use mygo_core::{Cancel, Config};
 use std::{
     fs::File,
-    io::{self, BufReader, Cursor, Read, Seek, SeekFrom},
+    io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom},
     path::Path,
     sync::{
         Arc,
@@ -270,7 +278,7 @@ fn decode_shared_impl(
     };
     let (source, mut timings) = prepare(path, largest, c, source_cancel, false, exact)?;
     let started = source.started;
-    // Source + one clone + output/scratch must fit the same per-operation budget.
+    // Keep the experimental API's conservative source/output/scratch budget.
     if c.image_limits().is_some_and(|(_, _, _, budget)| {
         u64::from(source.image.width())
             * u64::from(source.image.height())
@@ -287,22 +295,7 @@ fn decode_shared_impl(
         if cancel.cancelled() {
             continue;
         }
-        let prepared = Prepared {
-            image: source.image.clone(),
-            icc: source.icc.clone(),
-            original_width: source.original_width,
-            original_height: source.original_height,
-            orientation: source.orientation,
-            started,
-        };
-        let result = finish(
-            prepared,
-            *target,
-            c,
-            cancel,
-            &mut |img, target| resize_cpu(img, target, c, cancel),
-            &mut timings,
-        );
+        let result = shared::render(&source, *target, c, cancel, &mut timings);
         if source_cancel.cancelled() {
             bail!("載入已取消");
         }
@@ -329,11 +322,15 @@ fn prepare(
     let start = Instant::now();
     let stats = Arc::new(IoStats::default());
     let mut timings = DecodeTimings::default();
-    let mut ir = ImageReader::new(reader(path, c, cancel, stats.clone())?).with_guessed_format()?;
-    let format = ir
-        .format()
-        .context("不支援此圖片格式（HEIC / AVIF / RAW 未啟用）")?;
-    if reject_jpeg && format == ImageFormat::Jpeg {
+    let mut source = reader(path, c, cancel, stats.clone())?;
+    let is_psd = source.fill_buf()?.starts_with(b"8BPS");
+    let mut ir = ImageReader::new(source).with_guessed_format()?;
+    if !is_psd {
+        ir.format()
+            .context("不支援此圖片格式（HEIC / AVIF / RAW 未啟用）")?;
+    }
+    let is_jpeg = ir.format() == Some(ImageFormat::Jpeg);
+    if reject_jpeg && is_jpeg {
         bail!("JPEG 保留各尺寸獨立原生縮放");
     }
     let mut limits = image::Limits::default();
@@ -342,7 +339,12 @@ fn prepare(
     limits.max_image_height = limits.max_image_width;
     limits.max_alloc = size_limits.map(|(_, _, _, budget)| budget);
     ir.limits(limits.clone());
-    let mut header: Box<dyn ImageDecoder> = if format == ImageFormat::Jpeg && !image_jpeg {
+    let mut header: Box<dyn ImageDecoder> = if is_psd {
+        Box::new(
+            psd::PsdDecoder::new(ir.into_inner(), c.clone(), cancel)
+                .context("PSD: failed to read saved composite header")?,
+        )
+    } else if is_jpeg && !image_jpeg {
         let mut source = ir.into_inner();
         let prefix = jpeg::read_header(&mut source)?;
         let mut header = image::codecs::jpeg::JpegDecoder::new(Cursor::new(prefix))?;
@@ -370,7 +372,7 @@ fn prepare(
     timings.header_us = start.elapsed().saturating_sub(header_io).as_micros() as u64;
     let codec_started = Instant::now();
     let target = if target == 0 { w.max(h) } else { target };
-    let mut img = if format == ImageFormat::Jpeg && !image_jpeg {
+    let mut img = if is_jpeg && !image_jpeg {
         drop(header);
         let mut d = jpeg_decoder::Decoder::new(reader(path, c, cancel, stats.clone())?);
         d.set_max_decoding_buffer_size(

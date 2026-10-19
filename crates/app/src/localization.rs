@@ -97,6 +97,7 @@ mod tests {
     fn every_ui_literal_has_an_english_translation() {
         for source in [
             include_str!("../../../ui/main.slint"),
+            include_str!("../../../ui/components/format_settings_dialog.slint"),
             include_str!("../../../ui/components/thumbnail_sidebar.slint"),
         ] {
             for part in source.split("I18n.t(\"").skip(1) {

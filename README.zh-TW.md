@@ -2,27 +2,25 @@
 
 繁體中文 | [English](README.md)
 
-以 Rust 與 Slint 開發的輕量 Windows 圖片瀏覽程式。
-專為高容量影像檔案打造的圖片瀏覽器，著重於高畫質、流暢瀏覽體驗。
+以 Rust 與 Slint 開發的輕量 Windows 看圖程式。
 
 ## 功能
 
 - 瀏覽資料夾與 SD 卡，支援拖放圖片及命令列開啟。
-- 支援 JPEG、PNG、WebP、BMP、TIFF、GIF（GIF／TIFF 顯示首幀／首頁）。
-- 縮圖、縮放、排序與多圖瀏覽。
+- 支援 JPEG、PNG、WebP、BMP、TIFF、GIF、PSD（GIF／TIFF 顯示首幀／首頁）。
+- 透過設定浮窗勾選讀入格式，自動儲存並套用至資料夾掃描、檔案選擇及直接開啟圖片。
+- 縮圖、縮放、排序、自訂快捷鍵與多圖瀏覽。
+- 檢視及複製 EXIF、PNG 文字資訊，包含 ComfyUI prompt／workflow。
 - 複製選取圖片，將不要的圖片移至程式專用垃圾桶。
 - 英文與繁體中文即時切換。
-- 自訂預載入圖片功能，切換大檔案圖片瀏覽不會卡頓。
 
 ## 效能
 
-透過 JPEG 縮放解碼、SIMD CPU 縮圖、背景載入與相鄰圖片預載，降低瀏覽時的處理負擔。SQLite 索引、有限容量的 RAM 快取與持久化縮圖快取支援大型資料夾；記憶體及圖片尺寸上限可調整。實際速度依圖片大小、儲存裝置與硬體而異。
+透過 JPEG 縮放解碼、SIMD CPU 縮圖、背景載入與相鄰圖片預載，降低瀏覽時的處理負擔。SQLite 索引、有限容量的 RAM 快取與持久化縮圖快取支援大型資料夾；記憶體及圖片尺寸上限可調整。PSD 使用小區塊或可重用的列緩衝區解碼，減少暫存記憶體。實際速度依圖片大小、儲存裝置與硬體而異。
 
-## 下載與使用
+PSD 顯示檔案儲存的合成影像，支援 8／16-bit RGB、灰階與 Raw、PackBits RLE、ZIP、ZIP prediction 壓縮，以及 RGB／灰階 ICC 色彩轉換。16-bit 轉為 8-bit 顯示。Photoshop 儲存時應啟用最大化相容性；不支援 PSB、32-bit、CMYK、Lab、索引色及缺少有效合成影像的檔案。
 
-在Relese頁面即可下載程式，雙擊使用。
-
-## 建置 (程式設計師用)
+## 建置
 
 需要 Rust stable，以及包含 C++ 工作負載與 Windows SDK 的 Visual Studio Build Tools（Windows x64）。
 

@@ -4,12 +4,13 @@ import { ImageViewer } from "components/image_viewer.slint";
 import { ZoomButton } from "components/zoom_button.slint";
 import { InfoRow, InfoField } from "components/info_row.slint";
 import { I18n } from "i18n.slint";
+import { FormatSettingsDialog } from "components/format_settings_dialog.slint";
 export { ThumbnailRow, InfoField, I18n }
 
 export component MainWindow inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
     title: "MyGoImage";
-    icon: @image-url("../assets/icon.svg");
+    icon: @image-url("../icon.png");
     forward-focus: keys;
     preferred-width: 1280px; preferred-height: 800px;
     min-width: 900px; min-height: 600px;
@@ -42,10 +43,20 @@ export component MainWindow inherits Window {
     in-out property <string> notice: "";
     callback load-info();
     public function scroll-settings(delta: float) {
-        settings-scroll.content-y = max(min(0px, settings-scroll.visible-height - settings-scroll.content-height), min(0px, settings-scroll.content-y + delta * 1px));
+        if !root.formats-open {
+            settings-scroll.content-y = max(min(0px, settings-scroll.visible-height - settings-scroll.content-height), min(0px, settings-scroll.content-y + delta * 1px));
+        }
     }
+    in-out property <bool> format-jpeg: true;
+    in-out property <bool> format-png: true;
+    in-out property <bool> format-webp: true;
+    in-out property <bool> format-bmp: true;
+    in-out property <bool> format-tiff: true;
+    in-out property <bool> format-gif: true;
+    in-out property <bool> format-psd: true;
     in-out property <int> language-index: 0;
     in-out property <bool> settings-open: false;
+    in-out property <bool> formats-open: false;
     in-out property <int> image-size-limit: 0;
     property <bool> delete-held: false;
     in-out property <bool> trash-companions: false;
@@ -297,6 +308,10 @@ export component MainWindow inherits Window {
                 ComboBox { model: ["English", "繁體中文"]; current-index <=> root.language-index; selected(value) => { I18n.english = root.language-index == 0; root.save-settings(); } }
                 Rectangle { horizontal-stretch: 1; }
             }
+            HorizontalBox {
+                Button { text: I18n.t("讀入的圖片格式"); clicked => { root.formats-open = true; } }
+                Rectangle { horizontal-stretch: 1; }
+            }
             Text { text: I18n.t("安全刪除"); color: #75c2ef; font-size: 18px; }
             Text { text: I18n.t("按 DEL 將選取圖片直接搬到 trash 資料夾，不建立子資料夾或紀錄檔；遇到同名檔案會自動加上編號。"); color: #dce7ef; wrap: word-wrap; }
             CheckBox { text: I18n.t("同時搬移同資料夾內，同檔名但不同副檔名的檔案（含 RAW、XMP 等）"); checked <=> root.trash-companions; toggled => { root.save-settings(); } }
@@ -333,6 +348,18 @@ export component MainWindow inherits Window {
             Rectangle { vertical-stretch: 1; }
         }
         }
+    }
+    FormatSettingsDialog {
+        open <=> root.formats-open;
+        format-jpeg <=> root.format-jpeg;
+        format-png <=> root.format-png;
+        format-webp <=> root.format-webp;
+        format-bmp <=> root.format-bmp;
+        format-tiff <=> root.format-tiff;
+        format-gif <=> root.format-gif;
+        format-psd <=> root.format-psd;
+        save-settings => { root.save-settings(); }
+        closed => { keys.focus(); }
     }
     if root.notice != "": Rectangle {
         x: (root.width - self.width) / 2; y: 8px;

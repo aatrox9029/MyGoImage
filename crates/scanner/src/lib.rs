@@ -1,4 +1,4 @@
-use mygo_core::{Cancel, Entry, supported};
+use mygo_core::{Cancel, Entry, ImageFormats};
 use std::{
     path::Path,
     sync::mpsc::SyncSender,
@@ -30,6 +30,25 @@ pub fn scan_excluding_notifying(
     excluded: Option<&Path>,
     wake: &dyn Fn(),
 ) {
+    scan_filtered(
+        root,
+        recursive,
+        cancel,
+        tx,
+        excluded,
+        wake,
+        &ImageFormats::default(),
+    );
+}
+pub fn scan_filtered(
+    root: &Path,
+    recursive: bool,
+    cancel: &Cancel,
+    tx: &SyncSender<ScanEvent>,
+    excluded: Option<&Path>,
+    wake: &dyn Fn(),
+    formats: &ImageFormats,
+) {
     let mut batch = Vec::with_capacity(256);
     let mut errors = 0;
     let mut first = true;
@@ -52,7 +71,7 @@ pub fn scan_excluding_notifying(
                 continue;
             }
         };
-        if !item.file_type().is_file() || !supported(item.path()) {
+        if !item.file_type().is_file() || !formats.allows(item.path()) {
             continue;
         }
         let meta = match item.metadata() {
