@@ -1,0 +1,7 @@
+export global I18n {
+    in-out property <bool> english: true;
+    pure callback translate(string, bool) -> string;
+    public pure function t(message: string) -> string {
+        return self.translate(message, self.english);
+    }
+}

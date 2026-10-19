@@ -1,0 +1,21 @@
+// Keep label metrics out of viewer geometry to avoid a fit-scale layout cycle.
+export component ZoomButton inherits Rectangle {
+    in property <float> percentage: 100;
+    in property <bool> enabled: true;
+    callback clicked();
+    min-width: 74px; max-width: 74px; preferred-width: 74px;
+    min-height: 32px; max-height: 32px; preferred-height: 32px;
+    border-radius: 4px;
+    border-width: 1px; border-color: #516273;
+    background: touch.pressed ? #3d5365 : touch.has-hover ? #344654 : #283540;
+    accessible-role: button;
+    accessible-label: round(root.percentage) + "%";
+    Text {
+        min-width: 74px; max-width: 74px;
+        min-height: 32px; max-height: 32px;
+        text: round(root.percentage) + "%";
+        color: root.enabled ? #f1f6fa : #8293a2;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+    touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
+}

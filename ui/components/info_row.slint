@@ -1,0 +1,17 @@
+export struct InfoField { name: string, value: string }
+
+export component InfoRow inherits Rectangle {
+    in property <string> name;
+    in property <string> value;
+    callback clicked();
+    background: touch.has-hover ? #25333f : transparent;
+    accessible-role: button;
+    accessible-label: root.name + "：" + root.value;
+    VerticalLayout {
+        padding-top: 10px; padding-left: 4px; padding-right: 4px; spacing: 6px;
+        Text { text: root.name; color: #8196a7; font-size: 12px; wrap: word-wrap; }
+        Text { text: root.value; color: #dce7ef; font-size: 13px; wrap: word-wrap; }
+        Rectangle { height: 1px; background: #35424d; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}

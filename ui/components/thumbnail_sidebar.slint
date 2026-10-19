@@ -1,0 +1,16 @@
+import { I18n } from "../i18n.slint";
+export struct ThumbnailRow { id: string, name: string, thumbnail: image, failed: bool }
+export component ThumbnailTile inherits Rectangle {
+    in property <ThumbnailRow> item;
+    in property <bool> selected;
+    callback picked();
+    height: 148px;
+    background: selected ? #243e55 : #192027;
+    border-radius: 6px;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? #75c2ef : #303b46;
+    Image { x: 8px; y: 7px; width: parent.width - 16px; height: 112px; source: root.item.thumbnail; image-fit: contain; }
+    if root.item.thumbnail.width == 0: Text { y: 38px; width: parent.width; text: root.item.failed ? I18n.t("無法預覽") : "· · ·"; color: #8293a2; horizontal-alignment: center; }
+    Text { x: 10px; y: 124px; width: parent.width - 20px; height: 18px; text: root.item.name; color: #e1e9ef; font-size: 12px; overflow: elide; }
+    TouchArea { clicked => { root.picked(); } }
+}

@@ -1,0 +1,57 @@
+export component ImageViewer inherits Rectangle {
+    in property <image> picture;
+    in property <int> original-width: 1;
+    in property <int> original-height: 1;
+    in-out property <float> zoom: 1;
+    in-out property <bool> fit: true;
+    in-out property <int> rotation: 0;
+    in-out property <bool> mirrored: false;
+    in property <bool> wheel-zoom: true;
+    in-out property <length> pan-x: 0px;
+    in-out property <length> pan-y: 0px;
+    callback high-resolution();
+    callback scale-changed(float);
+    changed scale => { root.scale-changed(root.scale); }
+    property <bool> turned: Math.mod(root.rotation, 180) != 0;
+    property <float> fit-scale: min((root.width - 32px) / (root.turned ? root.original-height * 1px : root.original-width * 1px), (root.height - 32px) / (root.turned ? root.original-width * 1px : root.original-height * 1px));
+    out property <float> scale: root.fit ? min(1, root.fit-scale) : root.zoom;
+    public function reset() { root.fit = true; root.pan-x = 0px; root.pan-y = 0px; }
+    public function actual() { root.fit = false; root.zoom = 1; root.pan-x = 0px; root.pan-y = 0px; root.high-resolution(); }
+    public function magnify(factor: float) { root.zoom = max(0.01, min(16, root.scale * factor)); root.fit = false; root.high-resolution(); }
+    public function magnify-at(factor: float, px: length, py: length) {
+        let previous = root.scale;
+        let next = max(0.01, min(16, previous * factor));
+        let ratio = next / max(0.000001, previous);
+        root.pan-x = (px - root.width / 2) * (1 - ratio) + root.pan-x * ratio;
+        root.pan-y = (py - root.height / 2) * (1 - ratio) + root.pan-y * ratio;
+        root.zoom = next;
+        root.fit = false;
+        root.high-resolution();
+    }
+    background: #10151a;
+    clip: true;
+    Image {
+        width: max(1px, root.original-width * root.scale * 1px);
+        height: max(1px, root.original-height * root.scale * 1px);
+        x: (parent.width - self.width) / 2 + root.pan-x;
+        y: (parent.height - self.height) / 2 + root.pan-y;
+        source: root.picture;
+        image-fit: contain;
+        transform-rotation: root.rotation * 1deg;
+        transform-scale-x: root.mirrored ? -1 : 1;
+    }
+    drag := TouchArea {
+        property <length> start-x;
+        property <length> start-y;
+        pointer-event(event) => { if event.kind == PointerEventKind.down { self.start-x = root.pan-x; self.start-y = root.pan-y; } }
+        moved => { if self.pressed { root.pan-x = self.start-x + self.mouse-x - self.pressed-x; root.pan-y = self.start-y + self.mouse-y - self.pressed-y; } }
+        double-clicked => { if root.fit { root.actual(); } else { root.reset(); } }
+        scroll-event(event) => {
+            if root.wheel-zoom || event.modifiers.control {
+                if event.delta-y != 0px { root.magnify-at(event.delta-y > 0px ? 1.2 : 0.833333, self.mouse-x, self.mouse-y); }
+                return accept;
+            }
+            return reject;
+        }
+    }
+}

@@ -1,0 +1,10 @@
+[package]
+name = "mygo-scanner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+mygo-core.workspace = true
+walkdir = "2"
+[dev-dependencies]
+tempfile.workspace = true

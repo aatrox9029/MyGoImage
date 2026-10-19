@@ -1,0 +1,32 @@
+[package]
+name = "mygoimage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+[dependencies]
+anyhow.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
+mygo-core.workspace = true
+mygo-scanner.workspace = true
+mygo-index.workspace = true
+mygo-decoder.workspace = true
+mygo-cache.workspace = true
+mygo-scheduler.workspace = true
+mygo-telemetry.workspace = true
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "compat-1-2", "unstable-winit-030"] }
+chrono = "0.4"
+kamadak-exif = "0.6"
+image.workspace = true
+arboard = { version = "=3.7.0", default-features = false }
+flate2 = "=1.1.10"
+crc32fast = "=1.5.2"
+rfd = "=0.17.2"
+tokio = { version = "=1.53.3", features = ["rt", "sync", "time", "macros"] }
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[dev-dependencies]
+image.workspace = true
+

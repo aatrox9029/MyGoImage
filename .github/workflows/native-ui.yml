@@ -1,0 +1,21 @@
+name: Native UI (interactive Windows runner)
+on: [workflow_dispatch]
+jobs:
+  native:
+    runs-on: [self-hosted, Windows, X64, interactive-desktop]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+      - run: pip install Pillow psutil
+      - run: cargo build --locked --release -p mygoimage
+      - run: python scripts/check-viewer-update.py
+      - run: python scripts/check-browser-features.py
+      - run: python scripts/check-image-size-ui.py
+      - run: python scripts/benchmark-viewer.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-ui-evidence
+          path: test-output/

@@ -1,0 +1,17 @@
+[package]
+name = "mygo-decoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+mygo-core.workspace = true
+anyhow.workspace = true
+image.workspace = true
+jpeg-decoder = { version = "=0.3.2", default-features = false }
+moxcms = { version = "=0.8.1", default-features = false }
+fast_image_resize = { version = "=6.1.0", default-features = false, features = ["std", "image"] }
+[dev-dependencies]
+tempfile.workspace = true
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "dx12", "wgsl"] }
+pollster = "=0.4.0"
+serde_json.workspace = true

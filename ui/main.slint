@@ -1,0 +1,344 @@
+import { Button, SpinBox, CheckBox, ComboBox, LineEdit, ScrollView, VerticalBox, HorizontalBox, AboutSlint, Palette } from "std-widgets.slint";
+import { ThumbnailTile, ThumbnailRow } from "components/thumbnail_sidebar.slint";
+import { ImageViewer } from "components/image_viewer.slint";
+import { ZoomButton } from "components/zoom_button.slint";
+import { InfoRow, InfoField } from "components/info_row.slint";
+import { I18n } from "i18n.slint";
+export { ThumbnailRow, InfoField, I18n }
+
+export component MainWindow inherits Window {
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    title: "MyGoImage";
+    icon: @image-url("../assets/icon.svg");
+    forward-focus: keys;
+    preferred-width: 1280px; preferred-height: 800px;
+    min-width: 900px; min-height: 600px;
+    background: #141a20;
+    in property <[ThumbnailRow]> rows;
+    in property <int> total-count: 0;
+    in property <int> page-start: 0;
+    in-out property <string> folder: "選擇相片資料夾或 SD 卡";
+    in-out property <string> status: "就緒 · DEL 移至垃圾桶";
+    in-out property <string> error: "";
+    in-out property <string> selected-id: "";
+    in-out property <image> picture;
+    in-out property <int> original-width: 1;
+    in-out property <int> original-height: 1;
+    in-out property <bool> loading: false;
+    in-out property <bool> recursive: false;
+    in-out property <bool> wheel-zoom: true;
+    property <float> zoom-percentage: 100;
+    in-out property <bool> descending: false;
+    in-out property <int> sort-index: 0;
+    in-out property <bool> preload-enabled: true;
+    in-out property <int> preload-count: 2;
+    in-out property <bool> resume-last-image: false;
+    in-out property <string> copy-folder: "";
+    in-out property <string> copy-shortcut: "";
+    in-out property <bool> capture-shortcut: false;
+    in-out property <bool> info-visible: false;
+    in property <[InfoField]> image-info;
+    callback copy-info(string);
+    in-out property <string> notice: "";
+    callback load-info();
+    public function scroll-settings(delta: float) {
+        settings-scroll.content-y = max(min(0px, settings-scroll.visible-height - settings-scroll.content-height), min(0px, settings-scroll.content-y + delta * 1px));
+    }
+    in-out property <int> language-index: 0;
+    in-out property <bool> settings-open: false;
+    in-out property <int> image-size-limit: 0;
+    property <bool> delete-held: false;
+    in-out property <bool> trash-companions: false;
+    in-out property <bool> multi-view: false;
+    in-out property <int> images-per-view: 6;
+    in-out property <int> grid-columns: 2;
+    in-out property <int> selected-index: 0;
+    in-out property <int> current-grid-page: 1;
+    in property <string> trash-path;
+    property <length> grid-cell-height: max(60px, grid.height / (root.images-per-view / root.grid-columns));
+    out property <int> first-visible: root.multi-view ? floor(-grid.content-y / root.grid-cell-height) * root.grid-columns : floor(-list.content-y / 148px);
+    out property <int> sidebar-visible-count: ceil(list.height / 148px) + 1;
+    callback save-settings(); callback trash-current(); callback open-trash();
+    callback copy-current(); callback choose-copy-folder();
+    callback grid-pick(int);
+    callback turn-page(int);
+    out property <float> grid-card-pixels: max(grid.visible-width / root.grid-columns - 16px, root.grid-cell-height - 38px) / 1px;
+    out property <float> grid-offset: -grid.content-y / 1px;
+    out property <float> grid-view-height: grid.height / 1px;
+    out property <float> preview-pixels: max(0px, max(viewer.width, viewer.height) - 32px) / 1px;
+    in-out property <length> sidebar-width: 240px;
+    callback open-folder(); callback open-file(); callback rescan(); callback sorting(int, bool);
+    callback pick(int); callback navigate(int); callback cancel-load(); callback retry();
+    callback high-resolution(); callback clear-cache(); callback reveal-file();
+    public function reset-view() { viewer.reset(); viewer.rotation = 0; viewer.mirrored = false; }
+    public function show-grid-page(index: int) {
+        grid.content-y = -floor(index / root.images-per-view) * grid.height;
+    }
+    public function reveal(index: int) {
+        if root.multi-view {
+            let grid-y = floor(index / root.grid-columns) * root.grid-cell-height + grid.content-y;
+            if grid-y < 0px { grid.content-y -= grid-y; }
+            else if grid-y + root.grid-cell-height > grid.height { grid.content-y -= grid-y + root.grid-cell-height - grid.height; }
+        }
+        // Scroll geometry is fixed, independent of the currently loaded page.
+        let item-y = index * 148px + list.content-y;
+        if item-y < 0px { list.content-y -= item-y; }
+        else if item-y + 148px > list.height { list.content-y -= item-y + 148px - list.height; }
+    }
+    keys := FocusScope {
+        key-released(event) => {
+            if event.text == Key.Delete { root.delete-held = false; return accept; }
+            return reject;
+        }
+        key-pressed(event) => {
+            if root.settings-open {
+                if event.text == Key.Escape { root.save-settings(); root.settings-open = false; root.capture-shortcut = false; return accept; }
+                return reject;
+            }
+            if event.text == Key.Delete {
+                if !root.delete-held && root.selected-id != "" { root.trash-current(); }
+                root.delete-held = true;
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "o" || event.text == "O") { root.open-file(); return accept; }
+            if event.text == Key.LeftArrow { root.navigate(-1); return accept; }
+            if event.text == Key.RightArrow { root.navigate(1); return accept; }
+            if root.multi-view && (event.text == Key.DownArrow || event.text == Key.PageDown) { root.turn-page(1); return accept; }
+            if root.multi-view && (event.text == Key.UpArrow || event.text == Key.PageUp) { root.turn-page(-1); return accept; }
+            if event.text == Key.Home { root.navigate(-100000000); return accept; }
+            if event.text == Key.End { root.navigate(100000000); return accept; }
+            if event.text == "f" || event.text == "F" { viewer.reset(); return accept; }
+            if event.text == "1" { viewer.actual(); return accept; }
+            if event.text == Key.Escape { root.cancel-load(); return accept; }
+            return reject;
+        }
+        VerticalLayout {
+            spacing: 0px;
+            Rectangle {
+                height: 66px; background: #1b242d;
+                HorizontalBox {
+                    padding-left: 20px; spacing: 12px;
+                    Text { text: "MyGoImage"; color: #f1f6fa; font-size: 22px; font-weight: 700; }
+                    Text { text: "1.0.0"; color: #92a6b7; font-size: 12px; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: I18n.t("設定"); clicked => { root.settings-open = true; } }
+                    CheckBox { text: I18n.t("多圖瀏覽"); checked <=> root.multi-view; toggled => { root.save-settings(); keys.focus(); } }
+                    Button { text: I18n.t("開啟圖片位置"); enabled: root.selected-id != ""; clicked => { root.reveal-file(); } }
+                    Button { text: I18n.t("開啟圖片"); clicked => { root.open-file(); } }
+                    Button { text: root.info-visible ? I18n.t("隱藏資訊") : I18n.t("圖片資訊"); clicked => { root.info-visible = !root.info-visible; root.load-info(); } }
+                }
+            }
+            Rectangle {
+                visible: root.multi-view;
+                height: root.multi-view ? 44px : 0px;
+                background: #1c252e;
+                HorizontalBox {
+                    Text { text: I18n.t("每頁張數"); color: #dce7ef; }
+                    SpinBox { width: 110px; minimum: 1; maximum: 24; value <=> root.images-per-view; edited => { root.save-settings(); if !self.has-focus { keys.focus(); } } }
+                    Text { text: I18n.t("第 ") + root.current-grid-page + " / " + max(1, ceil(root.total-count / root.images-per-view)) + I18n.t(" 頁"); color: #a9bfce; }
+                    ComboBox { model: [I18n.t("檔名"), I18n.t("修改時間"), I18n.t("檔案大小")]; current-index <=> root.sort-index; selected(value) => { root.sorting(root.sort-index, root.descending); } }
+                    CheckBox { text: I18n.t("降冪排列"); checked <=> root.descending; toggled => { root.sorting(root.sort-index, root.descending); keys.focus(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: I18n.t("上一頁 ↑"); clicked => { root.turn-page(-1); keys.focus(); } }
+                    Button { text: I18n.t("下一頁 ↓"); clicked => { root.turn-page(1); keys.focus(); } }
+                }
+            }
+            HorizontalLayout {
+                spacing: 0px;
+                Rectangle {
+                    visible: !root.multi-view; width: root.multi-view ? 0px : root.sidebar-width; background: #192027;
+                    VerticalLayout {
+                        padding: 10px; spacing: 8px;
+                        Text { text: I18n.t(root.folder); color: #b9c9d5; overflow: elide; height: 32px; font-size: 12px; }
+                        HorizontalLayout {
+                            
+                            Button { text: I18n.t("重新連線"); clicked => { root.rescan(); } }
+                        }
+                        ComboBox { model: [I18n.t("檔名"), I18n.t("修改時間"), I18n.t("檔案大小")]; current-index <=> root.sort-index; selected(value) => { root.sorting(root.sort-index, root.descending); } }
+                        CheckBox { text: I18n.t("降冪排列"); checked <=> root.descending; toggled => { root.sorting(root.sort-index, root.descending); } }
+                        list := ScrollView {
+                            horizontal-stretch: 1; vertical-stretch: 1;
+                            content-height: root.total-count * 148px;
+                            content-width: self.visible-width;
+                            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                            for row[index] in root.rows: ThumbnailTile {
+                                y: (root.page-start + index) * 148px;
+                                width: list.visible-width;
+                                item: row;
+                                selected: row.id != "" && row.id == root.selected-id;
+                                picked => { root.pick(root.page-start + index); }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    visible: !root.multi-view; width: root.multi-view ? 0px : 6px; background: splitter.has-hover ? #75c2ef : #303e49;
+                    splitter := TouchArea {
+                        property <length> initial;
+                        pointer-event(e) => { if e.kind == PointerEventKind.down { self.initial = root.sidebar-width; } }
+                        moved => { if self.pressed { root.sidebar-width = max(160px, min(400px, self.initial + self.mouse-x - self.pressed-x)); } }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 0px;
+                    Rectangle {
+                        visible: !root.multi-view; height: root.multi-view ? 0px : 52px; background: #1c252e;
+                        HorizontalBox {
+                            spacing: 6px;
+                            Button { text: "←"; clicked => { root.navigate(-1); } }
+                            Button { text: "→"; clicked => { root.navigate(1); } }
+                            ZoomButton { percentage: root.zoom-percentage; enabled: root.picture.width > 0; clicked => { if viewer.fit { viewer.actual(); } else { viewer.reset(); } } }
+                            Button { text: "−"; clicked => { viewer.magnify(0.8); } }
+                            Button { text: "+"; clicked => { viewer.magnify(1.25); } }
+                            Button { text: I18n.t("旋轉"); clicked => { viewer.rotation = Math.mod(viewer.rotation + 90, 360); } }
+                            Button { text: viewer.mirrored ? I18n.t("還原鏡像") : I18n.t("鏡像翻轉"); enabled: root.picture.width > 0; clicked => { viewer.mirrored = !viewer.mirrored; } }
+                            Rectangle { horizontal-stretch: 1; }
+                            
+                        }
+                    }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        grid := ScrollView {
+                            property <length> previous-height: 0px;
+                            changed height => {
+                                if self.previous-height > 0px {
+                                    self.content-y = self.content-y * (self.height / self.previous-height);
+                                }
+                                self.previous-height = self.height;
+                            }
+                            visible: root.multi-view;
+                            content-height: ceil(root.total-count / root.images-per-view) * self.height;
+                            content-width: self.visible-width;
+                            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                            for row[index] in root.rows: Rectangle {
+                                x: Math.mod(root.page-start + index, root.grid-columns) * (grid.visible-width / root.grid-columns);
+                                y: floor((root.page-start + index) / root.grid-columns) * root.grid-cell-height;
+                                width: grid.visible-width / root.grid-columns;
+                                height: root.grid-cell-height;
+                                background: row.id == root.selected-id ? #243e55 : #10151a;
+                                border-width: 2px;
+                                border-color: row.id == root.selected-id ? #75c2ef : #303b46;
+                                Image { x: 8px; y: 8px; width: parent.width - 16px; height: max(1px, parent.height - 38px); source: row.thumbnail; image-fit: contain; }
+                                if row.thumbnail.width == 0: Text { text: row.failed ? I18n.t("無法讀取") : I18n.t("載入中…"); color: #8293a2; horizontal-alignment: center; vertical-alignment: center; }
+                                Text { x: 10px; y: parent.height - 26px; width: parent.width - 20px; height: 20px; text: row.name; color: #e1e9ef; overflow: elide; }
+                                TouchArea { clicked => { root.grid-pick(root.page-start + index); keys.focus(); } }
+                            }
+                        }
+                        viewer := ImageViewer {
+                            visible: !root.multi-view;
+                            picture: root.picture;
+                            original-width: root.original-width;
+                            original-height: root.original-height;
+                            wheel-zoom: true;
+                            scale-changed(scale) => { root.zoom-percentage = scale * 100; }
+                            high-resolution => { root.high-resolution(); }
+                        }
+                        if root.total-count == 0 && root.picture.width == 0 && !root.loading: VerticalLayout {
+                            alignment: center; spacing: 16px;
+                            Text { text: I18n.t("開啟圖片、資料夾或 SD 卡開始瀏覽\nJPEG · PNG · WebP · BMP · TIFF · GIF"); color: #8196a7; horizontal-alignment: center; }
+                        }
+                        if root.loading && !root.multi-view: Rectangle {
+                            x: 20px; y: 20px; width: 180px; height: 38px; background: #293e50; border-radius: 6px;
+                            Text { text: I18n.t("正在載入…  Esc 取消"); color: #dcecf7; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        if root.error != "": Rectangle {
+                            x: 20px; y: parent.height - self.height - 20px; width: parent.width - 40px; height: 104px; background: #422c2c; border-radius: 6px;
+                            VerticalBox {
+                                Text { text: I18n.t(root.error); color: #ffdddd; wrap: word-wrap; font-size: 12px; }
+                                Button { text: I18n.t("重試 / 重新連線"); clicked => { root.retry(); } }
+                            }
+                        }
+                    }
+                }
+                if root.info-visible: Rectangle {
+                    width: 280px; background: #192027;
+                    VerticalBox {
+                        padding: 16px; spacing: 12px;
+                        Text { text: I18n.t("圖片資訊"); color: #75c2ef; font-size: 18px; }
+                        ScrollView {
+                            content-width: self.visible-width;
+                            VerticalLayout {
+                                width: parent.visible-width; spacing: 0px;
+                                for field in root.image-info: InfoRow {
+                                    name: I18n.t(field.name); value: field.value;
+                                    clicked => { root.copy-info(field.value); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                height: 40px; background: #1c252e;
+                HorizontalBox {
+                    Text { text: I18n.t(root.status); color: #a9bfce; font-size: 12px; overflow: elide; horizontal-stretch: 1; }
+                    Button { text: I18n.t("複製到指定資料夾"); enabled: root.selected-id != ""; clicked => { root.copy-current(); keys.focus(); } }
+                    Button { text: I18n.t("清除快取"); clicked => { root.clear-cache(); } }
+                    Button { text: I18n.t("關於 Slint"); clicked => { about.show(); } }
+                }
+            }
+        }
+    }
+    Rectangle {
+        visible: root.settings-open;
+        background: #141a20;
+        TouchArea {}
+        settings-scroll := ScrollView {
+        content-width: self.visible-width;
+        VerticalBox {
+            width: settings-scroll.visible-width;
+            padding: 24px; spacing: 10px;
+            HorizontalBox {
+                Text { text: I18n.t("設定"); color: #f1f6fa; font-size: 26px; horizontal-stretch: 1; }
+                Button { text: I18n.t("完成"); clicked => { root.save-settings(); root.settings-open = false; root.capture-shortcut = false; keys.focus(); } }
+            }
+            HorizontalBox {
+                Text { text: "Language / 語言"; color: #dce7ef; }
+                ComboBox { model: ["English", "繁體中文"]; current-index <=> root.language-index; selected(value) => { I18n.english = root.language-index == 0; root.save-settings(); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Text { text: I18n.t("安全刪除"); color: #75c2ef; font-size: 18px; }
+            Text { text: I18n.t("按 DEL 將選取圖片直接搬到 trash 資料夾，不建立子資料夾或紀錄檔；遇到同名檔案會自動加上編號。"); color: #dce7ef; wrap: word-wrap; }
+            CheckBox { text: I18n.t("同時搬移同資料夾內，同檔名但不同副檔名的檔案（含 RAW、XMP 等）"); checked <=> root.trash-companions; toggled => { root.save-settings(); } }
+            Text { text: I18n.t("垃圾桶：") + root.trash-path; color: #a9bfce; wrap: word-wrap; }
+            Button { text: I18n.t("開啟垃圾桶"); clicked => { root.open-trash(); } }
+            Text { text: I18n.t("瀏覽方式"); color: #75c2ef; font-size: 18px; }
+            CheckBox { text: I18n.t("開啟同資料夾時接續上次選取的圖片"); checked <=> root.resume-last-image; toggled => { root.save-settings(); } }
+            Text { text: I18n.t("預先載入"); color: #75c2ef; font-size: 18px; }
+            CheckBox { text: I18n.t("預先載入前後圖片"); checked <=> root.preload-enabled; toggled => { root.save-settings(); } }
+            HorizontalBox {
+                Text { text: I18n.t("預載後續張數（1–24 張）"); color: #dce7ef; }
+                SpinBox { minimum: 1; maximum: 24; enabled: root.preload-enabled; value <=> root.preload-count; edited => { root.save-settings(); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Text { text: I18n.t("載入目前圖片、後續 ") + root.preload-count + I18n.t(" 張與前面 ") + floor(root.preload-count / 2) + I18n.t(" 張。例如第 50 張、設定 10 張會載入第 45～60 張。前後遇到資料夾邊界就停止，不循環。關閉預載仍會載入畫面內的圖片。"); color: #a9bfce; wrap: word-wrap; }
+            Text { text: I18n.t("快速複製"); color: #75c2ef; font-size: 18px; }
+            HorizontalBox {
+                LineEdit { text <=> root.copy-folder; placeholder-text: I18n.t("選擇或輸入目的地資料夾"); edited => { root.save-settings(); } }
+                Button { text: I18n.t("選擇資料夾"); clicked => { root.choose-copy-folder(); } }
+            }
+            Text { text: I18n.t("使用下方「複製到指定資料夾」按鈕，複製選取圖片及同資料夾內同檔名的所有副檔名（含 RAW、XMP）。來源會保留；目的地已有同名圖片時會提醒並跳過，不建立重複副本。"); color: #a9bfce; wrap: word-wrap; }
+            HorizontalBox {
+                Button { text: root.capture-shortcut ? I18n.t("請按快捷鍵（Esc 取消）") : I18n.t("設定快捷鍵：") + (root.copy-shortcut == "" ? I18n.t("未設定") : root.copy-shortcut); clicked => { root.capture-shortcut = true; keys.focus(); } }
+                Button { text: I18n.t("清除快捷鍵"); clicked => { root.copy-shortcut = ""; root.capture-shortcut = false; root.save-settings(); keys.focus(); } }
+            }
+            Text { text: I18n.t("圖片大小"); color: #75c2ef; font-size: 18px; }
+            ComboBox {
+                model: [I18n.t("省記憶體（預設，檔案最大 512 MB）"), I18n.t("最高 2,400 萬像素／檔案最大 512 MB"), I18n.t("最高 5,000 萬像素／檔案最大 1 GB"), I18n.t("最高 1 億像素／檔案最大 2 GB"), I18n.t("不限制大小")];
+                current-index <=> root.image-size-limit;
+                selected(value) => { root.save-settings(); }
+            }
+            Text { text: root.image-size-limit == 4 ? I18n.t("不限制像素、檔案大小及解碼記憶體；仍受電腦記憶體、格式與載入時間限制，大圖可能耗盡記憶體。") : root.image-size-limit == 0 ? I18n.t("預設保留低記憶體用量：JPEG 自動縮小解碼，其他格式約支援 839 萬像素。選擇更高選項可載入更大圖片。") : I18n.t("提高上限會增加記憶體用量。設定立即生效並自動儲存。"); color: #a9bfce; wrap: word-wrap; }
+
+            Rectangle { vertical-stretch: 1; }
+        }
+        }
+    }
+    if root.notice != "": Rectangle {
+        x: (root.width - self.width) / 2; y: 8px;
+        width: min(root.width - 32px, 520px); height: 30px;
+        background: #34516b; border-radius: 5px;
+        Text { text: I18n.t(root.notice); color: #ffffff; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    }
+    about := PopupWindow { width: 460px; height: 360px; AboutSlint {} }
+}

@@ -1,0 +1,11 @@
+/target/
+/.tools/
+/dist/
+/test-output/
+/trash/
+/THIRD_PARTY_LICENSES/
+__pycache__/
+*.py[cod]
+*.tmp
+*.log
+/test-output-toolchain.txt
