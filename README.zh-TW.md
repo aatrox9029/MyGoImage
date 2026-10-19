@@ -1,7 +1,7 @@
 # MyGoImage
 
-繁體中文 | [English](README.md)
-
+繁體中文 | [English](README.md)<br>
+<img width="300" height="300" alt="icon" src="https://github.com/user-attachments/assets/6768accb-7d3c-409b-b906-b9a816f03b75" /><br>
 以 Rust 與 Slint 開發的輕量 Windows 看圖程式。
 專為攝影作品與大型影像檔案打造，著重於流暢的瀏覽體驗。
 
