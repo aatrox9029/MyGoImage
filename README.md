@@ -3,24 +3,27 @@
 [繁體中文](README.zh-TW.md) | English
 
 A lightweight Windows image viewer built with Rust and Slint.
+Designed for photography and large image files, with a focus on smooth browsing.
 
 ## Features
 
-- Browse folders and SD cards, with support for opening images via drag and drop or the command line.
 - View JPEG, PNG, WebP, BMP, TIFF, GIF and PSD images (the first frame of GIFs and the first page of TIFFs).
-- Choose which image formats to load in a dedicated settings dialog; selections are saved and applied to folder scans, file selection and direct opening.
-- Thumbnails, zoom, sorting, customizable keyboard shortcuts and multi-image viewing.
-- View and copy EXIF and PNG text metadata, including ComfyUI prompts and workflows.
-- Copy selected images and move unwanted images to the application's dedicated trash folder.
+- Quickly copy files, safely delete images and view multiple images.
 - Switch instantly between English and Traditional Chinese.
+- Preloading helps keep browsing large images smooth.
 
 ## Performance
 
+Optimized for common image formats.
 Scaled JPEG decoding, SIMD CPU resizing, background loading and adjacent-image preloading reduce processing during browsing. SQLite indexing, bounded RAM caches and a persistent thumbnail cache support large folders. Memory and image-size limits are configurable. PSD decoding uses small blocks or reusable row buffers to reduce temporary memory. Actual speed depends on image size, storage and hardware.
 
 PSD viewing uses the saved composite image and supports 8/16-bit RGB and grayscale with Raw, PackBits RLE, ZIP and ZIP prediction compression, including RGB/grayscale ICC conversion. 16-bit images are displayed as 8-bit. Save with Photoshop's Maximize Compatibility enabled. PSB, 32-bit, CMYK, Lab, indexed color and files without a valid composite image are unsupported.
 
-## Build
+## Download and Use
+
+Download from the Releases page and double-click to launch.
+
+## Build (for Developers)
 
 Requires Rust stable and Visual Studio Build Tools with the C++ workload and Windows SDK for Windows x64.
 
