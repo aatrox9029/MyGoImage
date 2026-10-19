@@ -1,4 +1,5 @@
 # MyGoImage
+<img width="300" height="300" alt="icon" src="https://github.com/user-attachments/assets/6768accb-7d3c-409b-b906-b9a816f03b75" />
 
 [繁體中文](README.zh-TW.md) | English
 
