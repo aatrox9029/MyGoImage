@@ -21,7 +21,7 @@ PSD viewing uses the saved composite image and supports 8/16-bit RGB and graysca
 
 ## Download and Use
 
-Download from the Releases page and double-click to launch.
+Download from the [Releases page](https://github.com/aatrox9029/MyGoImage/releases/tag/v1.0.0) and double-click to launch.
 
 ## Build (for Developers)
 
