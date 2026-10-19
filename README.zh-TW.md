@@ -21,7 +21,7 @@ PSD 顯示檔案中儲存的合成影像，支援 8／16-bit RGB 與灰階影像
 
 ## 下載與使用
 
-從 Releases 頁面下載，雙擊即可使用。
+從 [Releases 頁面](https://github.com/aatrox9029/MyGoImage/releases/tag/v1.0.0)下載，雙擊即可使用。
 
 ## 建置（供開發者使用）
 
